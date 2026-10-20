@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { runCliProcessOnce } from "../src/agents/cli.js";
+import { parseTokenUsage, runCliProcessOnce } from "../src/agents/cli.js";
 import {
   createOpenCodeChildEnvironment,
   isQuotaFailure,
@@ -75,6 +75,25 @@ test("timeouts resolve from phase-specific, provider-specific, then phase defaul
   assert.equal(resolveCliTimeout("opencode", "signoff", { DEBATE_TIMEOUT_OPENCODE_MS: "30000" }), 30000);
   assert.equal(resolveCliTimeout("agy", "turn", {}), 240000);
   assert.throws(() => resolveCliTimeout("agy", "turn", { DEBATE_TIMEOUT_AGY_TURN_MS: "0" }), /entero/);
+});
+
+test("token usage parsing accepts finite nonnegative counters and ignores malformed fields", () => {
+  assert.deepEqual(
+    parseTokenUsage({
+      input_tokens: 120,
+      output_tokens: 18,
+      thinking_tokens: 7,
+      cache_read_tokens: 90,
+      total_tokens: 145,
+      unknown: 1,
+      invalid: "12",
+      negative: -1,
+      fractional: 1.5,
+    }),
+    { input_tokens: 120, output_tokens: 18, thinking_tokens: 7, cache_read_tokens: 90, total_tokens: 145 },
+  );
+  assert.equal(parseTokenUsage(null), undefined);
+  assert.equal(parseTokenUsage({ input_tokens: "12" }), undefined);
 });
 
 test("quota failures are terminal and ambiguous 429 responses are not retried", () => {

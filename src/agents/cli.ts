@@ -35,8 +35,24 @@ export interface CliRunOptions {
   timeoutMs?: number;
   maxRetries?: number;
   env?: NodeJS.ProcessEnv;
+  onAttempt?: () => void;
+  onUsage?: (usage: CliTokenUsage) => void;
   onRetry?: (retry: number, delayMs: number, error: unknown) => void;
   onOutput?: (stdout: string, stderr: string, attempt: number) => void;
+}
+
+export interface CliTokenUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  thinking_tokens?: number;
+  cache_read_tokens?: number;
+  total_tokens?: number;
+}
+
+interface CliRunResult {
+  text: string;
+  session: AgentSession;
+  usage?: CliTokenUsage;
 }
 
 interface CliExecutionDetails {
@@ -115,6 +131,7 @@ export function runCliProcessOnce(
       );
       return;
     }
+    options.onAttempt?.();
 
     const timer = setTimeout(() => {
       child.kill();
@@ -184,8 +201,8 @@ async function runProcess(
   model: string,
   provider: CliProvider,
   options: CliRunOptions,
-  parse: (output: { stdout: string; stderr: string }) => { text: string; session: AgentSession },
-): Promise<{ text: string; session: AgentSession }> {
+  parse: (output: { stdout: string; stderr: string }) => CliRunResult,
+): Promise<CliRunResult> {
   const phase = options.phase ?? "turn";
   const retryPolicy = resolveRetryPolicy();
   return withTransientRetries(
@@ -227,7 +244,7 @@ export async function runOpenCode(
   session: AgentSession,
   title: string,
   options: CliRunOptions = {},
-): Promise<{ text: string; session: AgentSession }> {
+): Promise<CliRunResult> {
   const model = options.model || process.env.OPENCODE_MODEL || "openai/gpt-6-luna-fast";
   const args = ["run", "--format", "json", "--agent", "plan", "--dir", projectRoot, "--model", model];
   if (session.id) args.push("--session", session.id);
@@ -253,7 +270,7 @@ export async function runAntigravity(
   prompt: string,
   session: AgentSession,
   options: CliRunOptions = {},
-): Promise<{ text: string; session: AgentSession }> {
+): Promise<CliRunResult> {
   const model = options.model || process.env.AGY_MODEL;
   const phase = options.phase ?? "turn";
   const timeoutMs = timeoutFor("agy", phase, options);
@@ -271,6 +288,7 @@ export async function runAntigravity(
     ({ stdout, stderr }) => {
       let responseText = stdout.trim();
       let conversationId = session.conversationId;
+      let usage: CliTokenUsage | undefined;
       try {
         const envelope = JSON.parse(responseText) as {
           response?: unknown;
@@ -280,10 +298,13 @@ export async function runAntigravity(
           error?: unknown;
           error_code?: unknown;
           retryable?: unknown;
+          usage?: unknown;
         };
         if (typeof envelope.response === "string") responseText = envelope.response;
         if (typeof envelope.conversation_id === "string") conversationId = envelope.conversation_id;
         if (typeof envelope.conversationId === "string") conversationId = envelope.conversationId;
+        usage = parseTokenUsage(envelope.usage);
+        if (usage) options.onUsage?.(usage);
         if (envelope.status === "ERROR") {
           const retryableText = envelope.retryable === true ? " retryable:true" : "";
           throw new CliExecutionError(
@@ -306,9 +327,26 @@ export async function runAntigravity(
           `Antigravity no devolvió texto.\nstdout:\n${stdout || "vacío"}\nstderr:\n${stderr || "vacío"}`,
           { stdout, stderr, code: "EMPTY_RESPONSE" },
         );
-      return { text: responseText, session: { ...session, conversationId } };
+      return { text: responseText, session: { ...session, conversationId }, usage };
     },
   );
+}
+
+export function parseTokenUsage(value: unknown): CliTokenUsage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const usage: CliTokenUsage = {};
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "thinking_tokens",
+    "cache_read_tokens",
+    "total_tokens",
+  ] as const) {
+    const count = source[key];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) usage[key] = count;
+  }
+  return Object.keys(usage).length ? usage : undefined;
 }
 
 export function workspacePath(): string {

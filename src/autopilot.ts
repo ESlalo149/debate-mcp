@@ -2,10 +2,11 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { runAntigravity, runOpenCode } from "./agents/cli.js";
-import type { CliRunOptions } from "./agents/cli.js";
+import type { CliRunOptions, CliTokenUsage } from "./agents/cli.js";
 import { closeRoom, createRoom, getDataRoot, getRoom, postTurn, setPlan, transcriptPath } from "./room.js";
 import { DebateTurnSchema, FinalPlanSchema, type DebateTurn, type FinalPlan, type Seat } from "./schema.js";
 import { createProposalRevisionId } from "./proposal.js";
+import { compactRoomHistory } from "./prompt.js";
 
 const turnSchemaText = `{"stance":"string","critique":["string"],"agree":false,"open_points":["string"],"proposal":"string","acceptedRevisionId":"sha256 hex or null"}`;
 const planSchemaText = `{"title":"string","summary":"string","decisions":["string"],"steps":["string"],"risks":["string"],"dissent":["string"]}`;
@@ -13,6 +14,37 @@ let runLogPath: string | undefined;
 let activeRoomId: string | undefined;
 let activeEngine: "both" | "agy" | undefined;
 let activeModels: Record<string, string | undefined> = {};
+const tokenMetrics = {
+  promptAttempts: 0,
+  promptBytes: 0,
+  legacyHistoryBytes: 0,
+  compactHistoryBytes: 0,
+  agyUsageReports: 0,
+  agyUsage: {} as CliTokenUsage,
+};
+
+function recordPromptAttempt(prompt: string, legacyHistory?: string, compactHistory?: string): void {
+  tokenMetrics.promptAttempts++;
+  tokenMetrics.promptBytes += Buffer.byteLength(prompt, "utf8");
+  if (legacyHistory !== undefined && compactHistory !== undefined) {
+    tokenMetrics.legacyHistoryBytes += Buffer.byteLength(legacyHistory, "utf8");
+    tokenMetrics.compactHistoryBytes += Buffer.byteLength(compactHistory, "utf8");
+  }
+}
+
+function recordAgyUsage(usage: CliTokenUsage): void {
+  tokenMetrics.agyUsageReports++;
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "thinking_tokens",
+    "cache_read_tokens",
+    "total_tokens",
+  ] as const) {
+    const count = usage[key];
+    if (count !== undefined) tokenMetrics.agyUsage[key] = (tokenMetrics.agyUsage[key] ?? 0) + count;
+  }
+}
 
 function log(message: string): void {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -75,7 +107,6 @@ interface ActiveProposal {
 function turnPrompt(
   topic: string,
   side: Seat,
-  roomId: string,
   history: string,
   opening: boolean,
   activeProposal?: ActiveProposal,
@@ -87,9 +118,10 @@ function turnPrompt(
   return [
     "Participas en un debate estructurado entre dos agentes para acordar un plan de trabajo.",
     "El debate lo orquesta un programa externo. No llames herramientas, no leas ni ejecutes comandos y no uses ninguna herramienta room_*. Devuelve únicamente el JSON solicitado; no publiques ni te unas a la sala.",
+    "Responde SOLO un objeto JSON válido, sin markdown ni texto alrededor, con esta forma exacta:",
+    turnSchemaText,
     `Tu asiento: ${side}. ${role}`,
     `Tema: ${topic}`,
-    `Sala: ${roomId}`,
     opening
       ? "Es tu intervención inicial: propón una dirección y enumera incógnitas importantes."
       : "Responde directamente a la última intervención. Resuelve objeciones concretas; cambia de postura si el argumento rival es mejor.",
@@ -98,8 +130,6 @@ function turnPrompt(
       : "Todavía no existe una propuesta vigente que aceptar; inicia con agree=false y acceptedRevisionId=null.",
     "Historial de la sala (JSON):",
     history,
-    "Responde SOLO un objeto JSON válido, sin markdown ni texto alrededor, con esta forma exacta:",
-    turnSchemaText,
     "Pon agree=true únicamente si aceptas exactamente la revisión vigente identificada arriba y open_points está vacío. En cualquier otro caso usa agree=false y acceptedRevisionId=null; proposal debe ser la propuesta completa.",
   ].join("\n\n");
 }
@@ -126,8 +156,8 @@ function enforceRevisionAcceptance(
 async function askSeat(
   topic: string,
   side: Seat,
-  roomId: string,
   history: string,
+  legacyHistory: string,
   opening: boolean,
   activeProposal: ActiveProposal | undefined,
   engine: "both" | "agy",
@@ -141,12 +171,13 @@ async function askSeat(
     proposer: { conversationId?: string };
   },
 ) {
-  const prompt = turnPrompt(topic, side, roomId, history, opening, activeProposal);
+  const prompt = turnPrompt(topic, side, history, opening, activeProposal);
   if (side === "opencode" && engine === "both") {
     log(`Ronda activa: solicitando intervención a OpenCode${sessions.opencode.id ? " (continúa sesión)" : ""}.`);
     const response = await withHeartbeat("OpenCode", () =>
       runOpenCode(prompt, sessions.opencode, `Debate ${topic.slice(0, 45)}`, {
         phase: "turn",
+        onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
         onRetry: (retry, delay, error) =>
           log(`OpenCode: reintento ${retry} en ${delay}ms tras error transitorio: ${String(error)}`),
         onOutput: captureCliOutput(roomFolder, `round-${round}-opencode`),
@@ -170,6 +201,8 @@ async function askSeat(
     runAntigravity(prompt, session, {
       model,
       phase: "turn",
+      onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
+      onUsage: recordAgyUsage,
       onRetry: (retry, delay, error) =>
         log(`${label}: reintento ${retry} en ${delay}ms tras error transitorio: ${String(error)}`),
       onOutput: captureCliOutput(roomFolder, `round-${round}-${proposer ? "proposer" : "critic"}`),
@@ -198,6 +231,7 @@ async function producePlan(
   topic: string,
   roomId: string,
   history: string,
+  legacyHistory: string,
   agreed: boolean,
   proposedFallback: string,
   engine: "both" | "agy",
@@ -225,6 +259,8 @@ async function producePlan(
               {
                 model: criticModel,
                 phase: "plan",
+                onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
+                onUsage: recordAgyUsage,
                 onRetry: (retry, delay, error) =>
                   log(`Antigravity plan: reintento ${retry} en ${delay}ms: ${String(error)}`),
                 onOutput: captureCliOutput(roomFolder, "final-plan"),
@@ -234,6 +270,7 @@ async function producePlan(
         : await withHeartbeat("OpenCode para sintetizar el plan", () =>
             runOpenCode(prompt, {}, `Plan final debate ${topic.slice(0, 40)}`, {
               phase: "plan",
+              onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
               onRetry: (retry, delay, error) =>
                 log(`OpenCode plan: reintento ${retry} en ${delay}ms: ${String(error)}`),
               onOutput: captureCliOutput(roomFolder, "final-plan"),
@@ -302,7 +339,8 @@ async function main() {
     antigravity: { conversationId?: string };
     proposer: { conversationId?: string };
   } = { opencode: {}, antigravity: {}, proposer: {} };
-  let history = JSON.stringify({ topic, messages: [] });
+  let history = compactRoomHistory([]);
+  let legacyHistory = JSON.stringify({ topic, messages: [] });
   let finalProposal = "";
   let activeProposal: ActiveProposal | undefined;
   let agreed = false;
@@ -312,8 +350,8 @@ async function main() {
       const turn = await askSeat(
         topic,
         side,
-        room.id,
         history,
+        legacyHistory,
         round === 1 && side === "opencode",
         activeProposal,
         engine,
@@ -336,7 +374,8 @@ async function main() {
         idempotencyKey: `${room.id}:${side}:round-${round}`,
       });
       finalProposal = turn.proposal;
-      history = JSON.stringify({ topic, messages: state.messages }, null, 2);
+      history = compactRoomHistory(state.messages);
+      legacyHistory = JSON.stringify({ topic, messages: state.messages }, null, 2);
       const latest = state.messages.filter((message) => message.kind !== "signoff").at(-1);
       activeProposal = latest?.revisionId ? { revisionId: latest.revisionId, text: latest.turn.proposal } : undefined;
       log(`[Ronda ${round}] ${side}: agree=${turn.agree}, puntos abiertos=${turn.open_points.length}`);
@@ -345,18 +384,17 @@ async function main() {
       if (state.phase === "signoff") {
         if (!state.agreedRevisionId) throw new Error("La sala entró en firma sin una revisión acordada.");
         const agreedProposal = { revisionId: state.agreedRevisionId, text: state.agreedPlan ?? turn.proposal };
+        const prompt = signoffPrompt(topic, agreedProposal.text, room.id, agreedProposal.revisionId);
         const signoff = await withHeartbeat("Antigravity para la firma", () =>
-          runAntigravity(
-            signoffPrompt(topic, agreedProposal.text, room.id, agreedProposal.revisionId),
-            sessions.antigravity,
-            {
-              model: criticModel,
-              phase: "signoff",
-              onRetry: (retry, delay, error) =>
-                log(`Antigravity firma: reintento ${retry} en ${delay}ms: ${String(error)}`),
-              onOutput: captureCliOutput(roomFolder, "signoff"),
-            },
-          ),
+          runAntigravity(prompt, sessions.antigravity, {
+            model: criticModel,
+            phase: "signoff",
+            onAttempt: () => recordPromptAttempt(prompt),
+            onUsage: recordAgyUsage,
+            onRetry: (retry, delay, error) =>
+              log(`Antigravity firma: reintento ${retry} en ${delay}ms: ${String(error)}`),
+            onOutput: captureCliOutput(roomFolder, "signoff"),
+          }),
         );
         Object.assign(sessions.antigravity, signoff.session);
         const signedTurn = enforceRevisionAcceptance(
@@ -369,7 +407,8 @@ async function main() {
           model: criticModel,
           idempotencyKey: `${room.id}:antigravity:signoff`,
         });
-        history = JSON.stringify({ topic, messages: signed.messages }, null, 2);
+        history = compactRoomHistory(signed.messages);
+        legacyHistory = JSON.stringify({ topic, messages: signed.messages }, null, 2);
         log(`Firma Antigravity: agree=${signedTurn.agree}, estado=${signed.status}`);
         agreed = signed.status === "consensus";
         if (!agreed && signed.status === "open") finalProposal = signedTurn.proposal;
@@ -383,11 +422,13 @@ async function main() {
   let state = await getRoom(room.id);
   if (state.status === "open") state = await closeRoom(room.id, true);
   agreed = state.status === "consensus";
-  history = JSON.stringify({ topic, messages: state.messages, agreed_plan: state.agreedPlan }, null, 2);
+  history = compactRoomHistory(state.messages);
+  legacyHistory = JSON.stringify({ topic, messages: state.messages, agreed_plan: state.agreedPlan }, null, 2);
   const plan = await producePlan(
     topic,
     room.id,
     history,
+    legacyHistory,
     agreed,
     state.agreedPlan ?? finalProposal,
     engine,
@@ -399,7 +440,7 @@ async function main() {
   mkdirSync(path.dirname(planPath), { recursive: true });
   writeFileSync(
     path.join(path.dirname(planPath), "result.json"),
-    `${JSON.stringify({ roomId: room.id, status: state.status, agreed, engine, models: activeModels, plan, transcript, createdAt: new Date().toISOString() }, null, 2)}\n`,
+    `${JSON.stringify({ roomId: room.id, status: state.status, agreed, engine, models: activeModels, plan, transcript, tokenMetrics, createdAt: new Date().toISOString() }, null, 2)}\n`,
     "utf8",
   );
   log(`Resultado: ${agreed ? "CONSENSO" : "SIN CONSENSO"}`);
@@ -433,7 +474,7 @@ await main().catch(async (error: unknown) => {
       const planPath = await setPlan(activeRoomId, partialPlan);
       writeFileSync(
         path.join(roomFolder, "result.json"),
-        `${JSON.stringify({ roomId: activeRoomId, status: room.status, agreed: false, engine: activeEngine, models: activeModels, plan: partialPlan, transcript, error: shortError, createdAt: new Date().toISOString() }, null, 2)}\n`,
+        `${JSON.stringify({ roomId: activeRoomId, status: room.status, agreed: false, engine: activeEngine, models: activeModels, plan: partialPlan, transcript, tokenMetrics, error: shortError, createdAt: new Date().toISOString() }, null, 2)}\n`,
         "utf8",
       );
       if (runLogPath)
