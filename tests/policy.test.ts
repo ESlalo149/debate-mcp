@@ -96,10 +96,10 @@ test("token usage parsing accepts finite nonnegative counters and ignores malfor
   assert.equal(parseTokenUsage({ input_tokens: "12" }), undefined);
 });
 
-test("AGY_STATELESS omits conversation IDs while the default preserves existing sessions", () => {
+test("AGY is stateless by default and AGY_STATELESS=0 preserves existing sessions", () => {
   const session = { conversationId: "existing-conversation" };
-  const statefulArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, {});
-  const statelessArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, { AGY_STATELESS: "1" });
+  const statefulArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, { AGY_STATELESS: "0" });
+  const statelessArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, {});
 
   const conversationIndex = statefulArgs.indexOf("--conversation");
   assert.deepEqual(statefulArgs.slice(conversationIndex, conversationIndex + 2), [

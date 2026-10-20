@@ -274,7 +274,7 @@ export function buildAntigravityArgs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const args = ["-p", prompt, "--output-format", "json", "--mode", "plan", "--print-timeout", printTimeout(timeoutMs)];
-  if (env.AGY_STATELESS !== "1" && session.conversationId) args.push("--conversation", session.conversationId);
+  if (env.AGY_STATELESS === "0" && session.conversationId) args.push("--conversation", session.conversationId);
   if (model) args.push("--model", model);
   if (env.AGY_EFFORT) args.push("--effort", env.AGY_EFFORT);
   return args;
@@ -288,7 +288,7 @@ export async function runAntigravity(
   const model = options.model || process.env.AGY_MODEL;
   const phase = options.phase ?? "turn";
   const timeoutMs = timeoutFor("agy", phase, options);
-  const stateless = process.env.AGY_STATELESS === "1";
+  const stateless = process.env.AGY_STATELESS !== "0";
   const args = buildAntigravityArgs(prompt, session, model, timeoutMs);
   return runProcess(
     agyBin,
