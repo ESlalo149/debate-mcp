@@ -10,7 +10,10 @@ process.env.DEBATE_DATA_DIR = dataDir;
 const { createRoom, getRoom, postTurn } = await import("../src/room.js");
 after(async () => rm(dataDir, { recursive: true, force: true }));
 
-function turn(proposal: string, options: { agree?: boolean; acceptedRevisionId?: string | null; openPoints?: string[] } = {}) {
+function turn(
+  proposal: string,
+  options: { agree?: boolean; acceptedRevisionId?: string | null; openPoints?: string[] } = {},
+) {
   return {
     stance: options.agree ? "Acepto la revisión" : "Propongo revisar la solución",
     critique: [],
@@ -28,22 +31,44 @@ test("posts are idempotent and consensus requires exact accepted revision and a 
   const revisionB = createProposalRevisionId(proposalB);
 
   const first = await postTurn(room.id, "opencode", turn(proposalA), { idempotencyKey: `${room.id}:opencode:round-1` });
-  const duplicate = await postTurn(room.id, "opencode", turn(proposalA), { idempotencyKey: `${room.id}:opencode:round-1` });
+  const duplicate = await postTurn(room.id, "opencode", turn(proposalA), {
+    idempotencyKey: `${room.id}:opencode:round-1`,
+  });
   assert.equal(duplicate.messages.length, 1);
   assert.equal(first.messages[0]?.revisionId, createProposalRevisionId(proposalA));
-  await assert.rejects(() => postTurn(room.id, "opencode", turn("different"), { idempotencyKey: `${room.id}:opencode:round-1` }), /idempotencyKey ya se usó/);
+  await assert.rejects(
+    () => postTurn(room.id, "opencode", turn("different"), { idempotencyKey: `${room.id}:opencode:round-1` }),
+    /idempotencyKey ya se usó/,
+  );
 
   await postTurn(room.id, "antigravity", turn(proposalB), { idempotencyKey: `${room.id}:antigravity:round-1` });
-  await postTurn(room.id, "opencode", turn(proposalB, { agree: true, acceptedRevisionId: revisionB }), { idempotencyKey: `${room.id}:opencode:round-2` });
-  const accepted = await postTurn(room.id, "antigravity", turn(proposalB, { agree: true, acceptedRevisionId: revisionB }), { idempotencyKey: `${room.id}:antigravity:round-2` });
+  await postTurn(room.id, "opencode", turn(proposalB, { agree: true, acceptedRevisionId: revisionB }), {
+    idempotencyKey: `${room.id}:opencode:round-2`,
+  });
+  const accepted = await postTurn(
+    room.id,
+    "antigravity",
+    turn(proposalB, { agree: true, acceptedRevisionId: revisionB }),
+    { idempotencyKey: `${room.id}:antigravity:round-2` },
+  );
   assert.equal(accepted.phase, "signoff");
   assert.equal(accepted.agreedPlan, proposalB);
   assert.equal(accepted.agreedRevisionId, revisionB);
 
-  const signed = await postTurn(room.id, "antigravity", turn(proposalB, { agree: true, acceptedRevisionId: revisionB }), { idempotencyKey: `${room.id}:antigravity:signoff` });
+  const signed = await postTurn(
+    room.id,
+    "antigravity",
+    turn(proposalB, { agree: true, acceptedRevisionId: revisionB }),
+    { idempotencyKey: `${room.id}:antigravity:signoff` },
+  );
   assert.equal(signed.status, "consensus");
   assert.deepEqual(signed.signedBy, ["opencode", "antigravity"]);
-  const repeatedSignoff = await postTurn(room.id, "antigravity", turn(proposalB, { agree: true, acceptedRevisionId: revisionB }), { idempotencyKey: `${room.id}:antigravity:signoff` });
+  const repeatedSignoff = await postTurn(
+    room.id,
+    "antigravity",
+    turn(proposalB, { agree: true, acceptedRevisionId: revisionB }),
+    { idempotencyKey: `${room.id}:antigravity:signoff` },
+  );
   assert.equal(repeatedSignoff.status, "consensus");
   assert.equal((await getRoom(room.id)).messages.filter((message) => message.kind === "signoff").length, 1);
 });
@@ -55,7 +80,11 @@ test("mismatched or edited revisions cannot trigger consensus", async () => {
   await postTurn(room.id, "opencode", turn(proposal));
   await postTurn(room.id, "antigravity", turn(proposal));
   await postTurn(room.id, "opencode", turn(`${proposal} con cambios`, { agree: true, acceptedRevisionId: revisionId }));
-  const state = await postTurn(room.id, "antigravity", turn(`${proposal} con cambios`, { agree: true, acceptedRevisionId: revisionId }));
+  const state = await postTurn(
+    room.id,
+    "antigravity",
+    turn(`${proposal} con cambios`, { agree: true, acceptedRevisionId: revisionId }),
+  );
   assert.equal(state.phase, "debate");
   assert.equal(state.status, "open");
   assert.equal(state.agreedPlan, undefined);

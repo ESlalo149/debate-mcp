@@ -53,6 +53,7 @@ npm install
 npm run build
 npm run debate -- --topic "Tema a debatir" --rounds 6
 npm test
+npm run format:check
 ```
 
 Antigravity usa por defecto `gemini-3.8-flash-low` para ambos asientos; OpenCode usa `openai/gpt-6-luna-fast`. Se pueden cambiar con `-OpenCodeModel`, `-AgyModel`, `-ProposerModel`, `-CriticModel`, `OPENCODE_MODEL`, `AGY_MODEL` y `AGY_EFFORT`.

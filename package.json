@@ -27,7 +27,9 @@
     "dev": "tsx src/server.ts",
     "debate": "tsx src/autopilot.ts",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
@@ -35,6 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "prettier": "^3.9.10",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

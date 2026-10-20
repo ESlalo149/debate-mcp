@@ -9,7 +9,11 @@ export const DebateTurnSchema = z.object({
   agree: z.boolean().default(false),
   open_points: z.array(z.string()).default([]),
   proposal: z.string().min(1),
-  acceptedRevisionId: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+  acceptedRevisionId: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i)
+    .nullable()
+    .optional(),
 });
 export type DebateTurn = z.infer<typeof DebateTurnSchema>;
 

@@ -27,7 +27,7 @@ const DEFAULT_TIMEOUTS: Record<CliPhase, number> = {
 const CURRENT_MCP_SERVERS = ["gitnexus", "chrome-devtools", "angular-cli", "gemini-browser", "debate-room"] as const;
 
 function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -48,20 +48,26 @@ function nonNegativeInteger(value: string | undefined, fallback: number, name: s
   return parsed;
 }
 
-export function resolveCliTimeout(provider: CliProvider, phase: CliPhase, env: NodeJS.ProcessEnv = process.env): number {
+export function resolveCliTimeout(
+  provider: CliProvider,
+  phase: CliPhase,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
   const providerName = provider.toUpperCase();
   const phaseName = phase.toUpperCase();
   const fallback = DEFAULT_TIMEOUTS[phase];
   return positiveInteger(
-    env[`DEBATE_TIMEOUT_${providerName}_${phaseName}_MS`]
-      ?? env[`DEBATE_TIMEOUT_${providerName}_MS`]
-      ?? env.DEBATE_TIMEOUT_MS,
+    env[`DEBATE_TIMEOUT_${providerName}_${phaseName}_MS`] ??
+      env[`DEBATE_TIMEOUT_${providerName}_MS`] ??
+      env.DEBATE_TIMEOUT_MS,
     fallback,
     `DEBATE_TIMEOUT_${providerName}_${phaseName}_MS`,
   );
 }
 
-export function resolveRetryPolicy(env: NodeJS.ProcessEnv = process.env): Required<Pick<RetryOptions, "maxRetries" | "baseDelayMs" | "maxDelayMs">> {
+export function resolveRetryPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): Required<Pick<RetryOptions, "maxRetries" | "baseDelayMs" | "maxDelayMs">> {
   return {
     maxRetries: nonNegativeInteger(env.DEBATE_MAX_RETRIES, 2, "DEBATE_MAX_RETRIES"),
     baseDelayMs: positiveInteger(env.DEBATE_RETRY_BASE_MS, 1000, "DEBATE_RETRY_BASE_MS"),
@@ -76,7 +82,9 @@ export function createOpenCodeChildEnvironment(parent: NodeJS.ProcessEnv = proce
     try {
       existing = objectValue(JSON.parse(content));
     } catch (error) {
-      throw new Error(`OPENCODE_CONFIG_CONTENT no contiene JSON válido: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `OPENCODE_CONFIG_CONTENT no contiene JSON válido: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -95,24 +103,38 @@ export function createOpenCodeChildEnvironment(parent: NodeJS.ProcessEnv = proce
 }
 
 export function isQuotaFailure(error: unknown): boolean {
-  const details = error && typeof error === "object" ? error as CliFailureDetails : {};
-  const text = `${error instanceof Error ? error.message : details.message ?? String(error)}\n${details.stdout ?? ""}\n${details.stderr ?? ""}`;
-  return /RESOURCE_EXHAUSTED|quota\s+(?:reached|exhausted|exceeded)|insufficient\s+(?:credits?|balance)|(?:resets?|reset)\s+in\s+\d/i.test(text);
+  const details = error && typeof error === "object" ? (error as CliFailureDetails) : {};
+  const text = `${error instanceof Error ? error.message : (details.message ?? String(error))}\n${details.stdout ?? ""}\n${details.stderr ?? ""}`;
+  return /RESOURCE_EXHAUSTED|quota\s+(?:reached|exhausted|exceeded)|insufficient\s+(?:credits?|balance)|(?:resets?|reset)\s+in\s+\d/i.test(
+    text,
+  );
 }
 
 export function isRetryableCliFailure(error: unknown): boolean {
   if (isQuotaFailure(error)) return false;
-  const details = error && typeof error === "object" ? error as CliFailureDetails : {};
-  const text = `${error instanceof Error ? error.message : details.message ?? String(error)}\n${details.stdout ?? ""}\n${details.stderr ?? ""}`;
+  const details = error && typeof error === "object" ? (error as CliFailureDetails) : {};
+  const text = `${error instanceof Error ? error.message : (details.message ?? String(error))}\n${details.stdout ?? ""}\n${details.stderr ?? ""}`;
   if (details.timedOut) return true;
-  if (typeof details.code === "string" && /^(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE)$/i.test(details.code)) return true;
-  if (/Retry-After|retry_after|retryable["']?\s*:\s*true|temporarily unavailable|endpoint is unavailable|connection reset|socket hang up/i.test(text)) return true;
+  if (
+    typeof details.code === "string" &&
+    /^(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE)$/i.test(details.code)
+  )
+    return true;
+  if (
+    /Retry-After|retry_after|retryable["']?\s*:\s*true|temporarily unavailable|endpoint is unavailable|connection reset|socket hang up/i.test(
+      text,
+    )
+  )
+    return true;
   return false;
 }
 
 const sleepDefault = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export async function withTransientRetries<T>(operation: (attempt: number) => Promise<T>, options: RetryOptions = {}): Promise<T> {
+export async function withTransientRetries<T>(
+  operation: (attempt: number) => Promise<T>,
+  options: RetryOptions = {},
+): Promise<T> {
   const defaults = resolveRetryPolicy();
   const maxRetries = options.maxRetries ?? defaults.maxRetries;
   const baseDelayMs = options.baseDelayMs ?? defaults.baseDelayMs;
