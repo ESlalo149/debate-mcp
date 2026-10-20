@@ -56,7 +56,7 @@ npm test
 npm run format:check
 ```
 
-Antigravity usa por defecto `gemini-3.8-flash-low` para ambos asientos; OpenCode usa `openai/gpt-6-luna-fast`. Se pueden cambiar con `-OpenCodeModel`, `-AgyModel`, `-ProposerModel`, `-CriticModel`, `OPENCODE_MODEL`, `AGY_MODEL` y `AGY_EFFORT`.
+Antigravity usa por defecto `gemini-3.8-flash-low` para ambos asientos; OpenCode usa `openai/gpt-6-luna-fast`. Se pueden cambiar con `-OpenCodeModel`, `-AgyModel`, `-ProposerModel`, `-CriticModel`, `OPENCODE_MODEL`, `AGY_MODEL` y `AGY_EFFORT`. `AGY_STATELESS=1` permite probar llamadas stateless a Antigravity: el autopiloto envía el contexto actual explícitamente y no reenvía la conversación acumulada.
 
 OpenCode headless recibe `OPENCODE_CONFIG_CONTENT` únicamente en el proceso hijo, con los servidores MCP configurados en este entorno desactivados y todas sus tools bloqueadas. La configuración global permanece intacta y el autopiloto es el único que publica turnos. El agente sigue pudiendo responder texto en modo plan.
 

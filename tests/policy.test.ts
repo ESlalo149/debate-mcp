@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseTokenUsage, runCliProcessOnce } from "../src/agents/cli.js";
+import { buildAntigravityArgs, parseTokenUsage, runCliProcessOnce } from "../src/agents/cli.js";
 import {
   createOpenCodeChildEnvironment,
   isQuotaFailure,
@@ -94,6 +94,21 @@ test("token usage parsing accepts finite nonnegative counters and ignores malfor
   );
   assert.equal(parseTokenUsage(null), undefined);
   assert.equal(parseTokenUsage({ input_tokens: "12" }), undefined);
+});
+
+test("AGY_STATELESS omits conversation IDs while the default preserves existing sessions", () => {
+  const session = { conversationId: "existing-conversation" };
+  const statefulArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, {});
+  const statelessArgs = buildAntigravityArgs("prompt", session, "test-model", 60_000, { AGY_STATELESS: "1" });
+
+  const conversationIndex = statefulArgs.indexOf("--conversation");
+  assert.deepEqual(statefulArgs.slice(conversationIndex, conversationIndex + 2), [
+    "--conversation",
+    "existing-conversation",
+  ]);
+  assert.equal(statelessArgs.includes("--conversation"), false);
+  assert.equal(statelessArgs.includes("existing-conversation"), false);
+  assert.deepEqual(statelessArgs.slice(-2), ["--model", "test-model"]);
 });
 
 test("quota failures are terminal and ambiguous 429 responses are not retried", () => {

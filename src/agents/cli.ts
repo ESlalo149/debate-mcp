@@ -266,6 +266,20 @@ function printTimeout(timeoutMs: number): string {
   return `${Math.max(1, Math.ceil(timeoutMs / 60_000))}m`;
 }
 
+export function buildAntigravityArgs(
+  prompt: string,
+  session: AgentSession,
+  model: string | undefined,
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const args = ["-p", prompt, "--output-format", "json", "--mode", "plan", "--print-timeout", printTimeout(timeoutMs)];
+  if (env.AGY_STATELESS !== "1" && session.conversationId) args.push("--conversation", session.conversationId);
+  if (model) args.push("--model", model);
+  if (env.AGY_EFFORT) args.push("--effort", env.AGY_EFFORT);
+  return args;
+}
+
 export async function runAntigravity(
   prompt: string,
   session: AgentSession,
@@ -274,10 +288,8 @@ export async function runAntigravity(
   const model = options.model || process.env.AGY_MODEL;
   const phase = options.phase ?? "turn";
   const timeoutMs = timeoutFor("agy", phase, options);
-  const args = ["-p", prompt, "--output-format", "json", "--mode", "plan", "--print-timeout", printTimeout(timeoutMs)];
-  if (session.conversationId) args.push("--conversation", session.conversationId);
-  if (model) args.push("--model", model);
-  if (process.env.AGY_EFFORT) args.push("--effort", process.env.AGY_EFFORT);
+  const stateless = process.env.AGY_STATELESS === "1";
+  const args = buildAntigravityArgs(prompt, session, model, timeoutMs);
   return runProcess(
     agyBin,
     args,
@@ -287,7 +299,7 @@ export async function runAntigravity(
     options,
     ({ stdout, stderr }) => {
       let responseText = stdout.trim();
-      let conversationId = session.conversationId;
+      let conversationId = stateless ? undefined : session.conversationId;
       let usage: CliTokenUsage | undefined;
       try {
         const envelope = JSON.parse(responseText) as {
@@ -301,8 +313,8 @@ export async function runAntigravity(
           usage?: unknown;
         };
         if (typeof envelope.response === "string") responseText = envelope.response;
-        if (typeof envelope.conversation_id === "string") conversationId = envelope.conversation_id;
-        if (typeof envelope.conversationId === "string") conversationId = envelope.conversationId;
+        if (!stateless && typeof envelope.conversation_id === "string") conversationId = envelope.conversation_id;
+        if (!stateless && typeof envelope.conversationId === "string") conversationId = envelope.conversationId;
         usage = parseTokenUsage(envelope.usage);
         if (usage) options.onUsage?.(usage);
         if (envelope.status === "ERROR") {

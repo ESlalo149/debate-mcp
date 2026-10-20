@@ -21,6 +21,7 @@ const tokenMetrics = {
   compactHistoryBytes: 0,
   agyUsageReports: 0,
   agyUsage: {} as CliTokenUsage,
+  agyUsageByCall: [] as Array<{ phase: string; model?: string; usage: CliTokenUsage }>,
 };
 
 function recordPromptAttempt(prompt: string, legacyHistory?: string, compactHistory?: string): void {
@@ -32,8 +33,9 @@ function recordPromptAttempt(prompt: string, legacyHistory?: string, compactHist
   }
 }
 
-function recordAgyUsage(usage: CliTokenUsage): void {
+function recordAgyUsage(usage: CliTokenUsage, phase: string, model?: string): void {
   tokenMetrics.agyUsageReports++;
+  tokenMetrics.agyUsageByCall.push({ phase, model, usage });
   for (const key of [
     "input_tokens",
     "output_tokens",
@@ -202,7 +204,7 @@ async function askSeat(
       model,
       phase: "turn",
       onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
-      onUsage: recordAgyUsage,
+      onUsage: (usage) => recordAgyUsage(usage, "turn", model),
       onRetry: (retry, delay, error) =>
         log(`${label}: reintento ${retry} en ${delay}ms tras error transitorio: ${String(error)}`),
       onOutput: captureCliOutput(roomFolder, `round-${round}-${proposer ? "proposer" : "critic"}`),
@@ -260,7 +262,7 @@ async function producePlan(
                 model: criticModel,
                 phase: "plan",
                 onAttempt: () => recordPromptAttempt(prompt, legacyHistory, history),
-                onUsage: recordAgyUsage,
+                onUsage: (usage) => recordAgyUsage(usage, "plan", criticModel),
                 onRetry: (retry, delay, error) =>
                   log(`Antigravity plan: reintento ${retry} en ${delay}ms: ${String(error)}`),
                 onOutput: captureCliOutput(roomFolder, "final-plan"),
@@ -390,7 +392,7 @@ async function main() {
             model: criticModel,
             phase: "signoff",
             onAttempt: () => recordPromptAttempt(prompt),
-            onUsage: recordAgyUsage,
+            onUsage: (usage) => recordAgyUsage(usage, "signoff", criticModel),
             onRetry: (retry, delay, error) =>
               log(`Antigravity firma: reintento ${retry} en ${delay}ms: ${String(error)}`),
             onOutput: captureCliOutput(roomFolder, "signoff"),
