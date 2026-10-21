@@ -1,11 +1,21 @@
 import type { RoomMessage } from "./schema.js";
 
 const MAX_HISTORY_ITEMS = 5;
-const MAX_HISTORY_TEXT_LENGTH = 220;
+const MAX_HISTORY_TEXT_LENGTH = 400;
+const MAX_WORD_BOUNDARY_BACKTRACK = 40;
 
 function compactText(value: string): string {
   if (value.length <= MAX_HISTORY_TEXT_LENGTH) return value;
-  return `${value.slice(0, MAX_HISTORY_TEXT_LENGTH - 3)}...`;
+
+  const maxContentLength = MAX_HISTORY_TEXT_LENGTH - 3;
+  const prefix = value.slice(0, maxContentLength);
+  const lastWordStart = prefix.search(/\s+\S*$/u);
+
+  if (lastWordStart >= maxContentLength - MAX_WORD_BOUNDARY_BACKTRACK && lastWordStart > 0) {
+    return `${prefix.slice(0, lastWordStart).trimEnd()}...`;
+  }
+
+  return `${prefix}...`;
 }
 
 function compactList(values: string[]): string[] {
